@@ -41,6 +41,9 @@ class BaseClient:
         signal.signal(signal.SIGINT, self.__schedule_abortion)
         signal.signal(signal.SIGTERM, self.__schedule_abortion)
 
+        # Handling filesystem freeze /unfreeze
+        self._FREEZE_FILESYSTEM = False
+
         # Writing the last operation file
         initialize(operation_name)
         self.LAST_OPERATION_DIRECTORY = os.getenv(
@@ -62,6 +65,7 @@ class BaseClient:
         self.__volumes_attached_ids = []
         self.__mounted_devices = []
         self.__devices = {}
+        self.__freeze_filesystem_list = []
 
     def __schedule_abortion(self, signum, frame):
         if self.__ABORT:
@@ -94,12 +98,14 @@ class BaseClient:
         #   Defining the methods which should check (BEFORE they get executed) whether the script was asked to abort its
         # execution. Basically, this list contains all methods which are used in backup.py or restore.py scripts. This is
         # done to ensure a 'safe' abortion process in terms of 'correctly cleaning up created resources'. All other methods
-        # except those listed below will ignore the demand to abort as it may possibly be not safe in their current state.
+        # except those listed below will ignore the demand to abort as it may possibly be not safe in their current state 
+        # (e.g. filesystem_sync is not added in the list for the same reason).
         methods_allow_aborting = [
             'get_persistent_volume_for_instance', 'copy_snapshot', 'create_snapshot', 'create_volume',
             'create_attachment', 'get_mountpoint', 'copy_directory', 'delete_directory', 'create_directory', 'format_device',
             'mount_device', 'create_and_encrypt_tarball_of_directory', 'encrypt_file', 'upload_to_blobstore', 'unmount_device', 'delete_attachment',
-            'delete_volume', 'delete_snapshot', 'download_from_blobstore', 'decrypt_and_extract_tarball_of_directory', 'decrypt_file'
+            'delete_volume', 'delete_snapshot', 'download_from_blobstore', 'decrypt_and_extract_tarball_of_directory', 'decrypt_file',
+            'filesystem_freeze', 'filesystem_unfreeze'
         ]
         if isinstance(method, types.MethodType) and attr in methods_allow_aborting and self.__ABORT:
             self.__abort()
@@ -150,6 +156,13 @@ class BaseClient:
     def _remove_volume(self, volume_id):
         if volume_id in self.__volumes_ids:
             self.__volumes_ids.remove(volume_id)
+
+    def _add_freeze_filesystem(self, mountpoint):
+        self.__freeze_filesystem_list.append(mountpoint)
+
+    def _remove_freeze_filesystem(self, mountpoint):
+        if mountpoint in self.__freeze_filesystem_list:
+            self.__freeze_filesystem_list.remove(mountpoint)
 
     def _add_attachment(self, volume_id, instance_id):
         self.__volumes_attached_ids.append((volume_id, instance_id))
@@ -376,6 +389,10 @@ class BaseClient:
         """
         self.logger.info(
             '[CLEAN-UP] Begin cleaning up all created resources ...')
+        for filesystem in self.__freeze_filesystem_list[:]:
+            self.logger.info(
+                '[CLEAN-UP] Unmounting device with name {}'.format(device))
+            self.unmount_device(device)
         for device in self.__mounted_devices[:]:
             self.logger.info(
                 '[CLEAN-UP] Unmounting device with name {}'.format(device))
@@ -480,6 +497,52 @@ class BaseClient:
         if cmd:
             self._remove_mounted_device(device)
         return cmd
+
+    def filesystem_sync(self):
+        """Commit filesystem caches to disk
+        sync() causes all pending modifications to filesystem metadata and
+        cached file data to be written to the underlying filesystems.
+        http://man7.org/linux/man-pages/man2/sync.2.html 
+        :Example:
+            ::
+
+                iaas_client.filesystem_sync()
+        """
+        self.shell('sync')
+
+    def filesystem_freeze(self, mountpoint):
+        """Suspend access to an filesystem (Linux Ext3/4, ReiserFS, JFS, XFS).
+        https://linux.die.net/man/8/fsfreeze
+
+        :param mountpoint: the pathname of the directory where the filesystem is mounted
+
+        :Example:
+            ::
+
+                iaas_client.filesystem_freeze('/var/vcap/store')
+        """
+        self._FREEZE_FILESYSTEM = True
+        self.logger.info(
+            '[FS FREEZE] Begin filesystem freeze...')
+        self.shell('fsfreeze --freeze {}'.format(mountpoint))
+        self._add_freeze_filesystem(mountpoint)
+
+    def filesystem_unfreeze(self, mountpoint):
+        """Resumes access to an filesystem (Linux Ext3/4, ReiserFS, JFS, XFS).
+        https://linux.die.net/man/8/fsfreeze
+        
+        :param mountpoint: the pathname of the directory where the filesystem is mounted
+
+        :Example:
+            ::
+
+                iaas_client.filesystem_unfreeze('/var/vcap/store')
+        """
+        if mountpoint in self.__freeze_filesystem_list:
+            self.logger.info(
+                '[FS UNFREEZE] Begin filesystem unfreeze...')
+            self.shell('fsfreeze --unfreeze {}'.format(mountpoint))
+            self._remove_freeze_filesystem(mountpoint)
 
     def create_and_encrypt_tarball_of_directory(self, directory_to_encrypt, encrypted_tarball_name):
         """Create a tarball of a directory and encrypt it with the secret provided at class instantiation.
