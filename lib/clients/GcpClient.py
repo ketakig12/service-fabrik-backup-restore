@@ -233,7 +233,7 @@ class GcpClient(BaseClient):
                 self._add_snapshot(snapshot.id)
                 self.logger.info('{} SUCCESS: snapshot-id={}, volume-id={}, status={} with tags {}'.format(
                     log_prefix, snapshot.id, volume_id, snapshot.status, self.tags))
-            else
+            else:
                 message = '{} ERROR: snapshot-id={} status={}'.format(
                     log_prefix, snapshot_name, snapshot.status)
                 raise Exception(message)
@@ -316,7 +316,7 @@ class GcpClient(BaseClient):
                 self._add_volume(volume.id)
                 self.logger.info('{} SUCCESS: volume-id={}, status={} with tags = {} '.format(
                     log_prefix, volume.id, volume.status, self.tags))
-            else
+            else:
                 message = '{} ERROR: volume-id={} status={}'.format(
                     log_prefix, volume.id, volume.status)
                 raise Exception(message)           
